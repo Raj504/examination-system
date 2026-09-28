@@ -1,0 +1,548 @@
+openapi: 3.0.3
+info:
+  title: University Examination & Result Processing API
+  version: 1.0.0
+  description: |
+    Backend for examinations, marks entry (interactive + bulk CSV), asynchronous
+    result processing and publication.
+
+    **Lifecycle**: `draft → marks_entry → marks_locked → processing → results_ready → published`
+    (see README for the full state machine).
+
+    **Conventions**
+    - Errors use `{"error": {"code", "message", "details?"}}` with stable `code` values.
+    - Send `Idempotency-Key` on any POST/PUT to make retries safe: a repeated request
+      replays the original response (`Idempotent-Replayed: true`).
+    - Mark updates use optimistic concurrency: pass `expected_version` (or `If-Match`).
+    - Lists use cursor pagination (`next_cursor` → `?cursor=`).
+servers:
+  - url: /api/v1
+    description: The server this page is opened from
+  - url: http://localhost:8080/api/v1
+    description: Docker (docker compose up)
+  - url: http://127.0.0.1:8000/api/v1
+    description: Local (php artisan serve)
+security:
+  - bearerAuth: []
+tags:
+  - name: Master data
+  - name: Examinations
+  - name: Marks
+  - name: Imports
+  - name: Results
+  - name: Public
+
+paths:
+  /programmes:
+    get:
+      tags: [Master data]
+      summary: List programmes
+      responses: { '200': { description: OK } }
+    post:
+      tags: [Master data]
+      summary: Create or update a programme (upsert by code)
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, name]
+              properties:
+                code: { type: string, example: BTECH }
+                name: { type: string, example: Bachelor of Technology }
+      responses:
+        '201': { description: Created }
+        '200': { description: Updated }
+
+  /courses:
+    get:
+      tags: [Master data]
+      summary: List courses
+      parameters:
+        - { name: programme, in: query, schema: { type: string } }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses: { '200': { description: OK } }
+    post:
+      tags: [Master data]
+      summary: Create or update a course (upsert by code)
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [programme_code, code, title, credits]
+              properties:
+                programme_code: { type: string, example: BTECH }
+                code: { type: string, example: CS101 }
+                title: { type: string, example: Programming Fundamentals }
+                credits: { type: integer, example: 4 }
+      responses:
+        '201': { description: Created }
+        '200': { description: Updated }
+
+  /students:
+    get:
+      tags: [Master data]
+      summary: List students
+      parameters:
+        - { name: programme, in: query, schema: { type: string } }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses: { '200': { description: OK } }
+    post:
+      tags: [Master data]
+      summary: Bulk upsert up to 1000 students (keyed by registration_no)
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [students]
+              properties:
+                students:
+                  type: array
+                  maxItems: 1000
+                  items:
+                    type: object
+                    required: [registration_no, name, programme_code]
+                    properties:
+                      registration_no: { type: string, example: S001 }
+                      name: { type: string, example: Asha Rao }
+                      email: { type: string, format: email }
+                      programme_code: { type: string, example: BTECH }
+      responses: { '200': { description: Upserted } }
+
+  /students/{registrationNo}:
+    get:
+      tags: [Master data]
+      summary: Get a student
+      parameters: [ { name: registrationNo, in: path, required: true, schema: { type: string } } ]
+      responses:
+        '200': { description: OK }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /examinations:
+    get:
+      tags: [Examinations]
+      summary: List examinations
+      parameters:
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/ExaminationStatus' } }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses: { '200': { description: OK } }
+    post:
+      tags: [Examinations]
+      summary: Create an examination (starts in draft)
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, name, academic_year]
+              properties:
+                code: { type: string, example: SEM1-2026 }
+                name: { type: string, example: Semester 1 End Examinations }
+                academic_year: { type: string, example: 2026-27 }
+      responses:
+        '201':
+          description: Created
+          content: { application/json: { schema: { $ref: '#/components/schemas/ExaminationEnvelope' } } }
+
+  /examinations/{examination}:
+    get:
+      tags: [Examinations]
+      summary: Get an examination (includes allowed transitions)
+      parameters: [ { $ref: '#/components/parameters/Examination' } ]
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/ExaminationEnvelope' } } }
+
+  /examinations/{examination}/courses:
+    get:
+      tags: [Examinations]
+      summary: Courses and assessment components of the examination
+      parameters: [ { $ref: '#/components/parameters/Examination' } ]
+      responses: { '200': { description: OK } }
+
+  /examinations/{examination}/courses/{courseCode}:
+    put:
+      tags: [Examinations]
+      summary: Add a course offering with weighted components (draft only)
+      description: Component weights must sum to 100. Replaces existing components of the offering.
+      parameters:
+        - { $ref: '#/components/parameters/Examination' }
+        - { name: courseCode, in: path, required: true, schema: { type: string, example: CS101 } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [components]
+              properties:
+                pass_percentage: { type: number, default: 40 }
+                components:
+                  type: array
+                  items:
+                    type: object
+                    required: [code, name, max_marks, weight]
+                    properties:
+                      code: { type: string, example: END }
+                      name: { type: string, example: End-term exam }
+                      max_marks: { type: number, example: 70 }
+                      weight: { type: number, example: 70 }
+                      min_pass_marks: { type: number, nullable: true, example: 28 }
+      responses:
+        '200': { description: OK }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+
+  /examinations/{examination}/enrollments:
+    post:
+      tags: [Examinations]
+      summary: Enroll students in a course offering (idempotent)
+      parameters:
+        - { $ref: '#/components/parameters/Examination' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [course_code, registration_nos]
+              properties:
+                course_code: { type: string, example: CS101 }
+                registration_nos: { type: array, maxItems: 5000, items: { type: string }, example: [S001, S002] }
+      responses:
+        '200':
+          description: Result counts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      enrolled: { type: integer }
+                      already_enrolled: { type: integer }
+                      unknown_registration_nos: { type: array, items: { type: string } }
+
+  /examinations/{examination}/progress:
+    get:
+      tags: [Examinations]
+      summary: Marks-entry completeness (expected vs entered marks per course)
+      parameters: [ { $ref: '#/components/parameters/Examination' } ]
+      responses: { '200': { description: OK } }
+
+  /examinations/{examination}/open-marks-entry:
+    post:
+      tags: [Examinations]
+      summary: draft → marks_entry
+      parameters: [ { $ref: '#/components/parameters/Examination' } ]
+      responses:
+        '200': { description: OK }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+  /examinations/{examination}/lock-marks:
+    post:
+      tags: [Examinations]
+      summary: marks_entry → marks_locked (refused while imports are running)
+      parameters: [ { $ref: '#/components/parameters/Examination' } ]
+      responses:
+        '200': { description: OK }
+        '409': { $ref: '#/components/responses/Error' }
+  /examinations/{examination}/unlock-marks:
+    post:
+      tags: [Examinations]
+      summary: marks_locked | results_ready → marks_entry (corrections before publication)
+      parameters: [ { $ref: '#/components/parameters/Examination' } ]
+      responses:
+        '200': { description: OK }
+        '409': { $ref: '#/components/responses/Error' }
+  /examinations/{examination}/publish:
+    post:
+      tags: [Examinations]
+      summary: results_ready → published (makes results visible to students)
+      parameters: [ { $ref: '#/components/parameters/Examination' } ]
+      responses:
+        '200': { description: OK }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /examinations/{examination}/marks:
+    get:
+      tags: [Marks]
+      summary: Marks sheet (cursor paginated)
+      parameters:
+        - { $ref: '#/components/parameters/Examination' }
+        - { name: course_code, in: query, schema: { type: string } }
+        - { name: registration_no, in: query, schema: { type: string } }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses: { '200': { description: OK } }
+    put:
+      tags: [Marks]
+      summary: Create or update one mark (optimistic concurrency)
+      description: |
+        Creating: omit `expected_version`. Updating: send the version you read
+        (`expected_version` or `If-Match: "3"`). A stale version returns **409**
+        with the current value; omitting it for an existing mark returns **428**.
+      parameters:
+        - { $ref: '#/components/parameters/Examination' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { name: If-Match, in: header, schema: { type: string, example: '"1"' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [registration_no, course_code, component_code]
+              properties:
+                registration_no: { type: string, example: S001 }
+                course_code: { type: string, example: CS101 }
+                component_code: { type: string, example: MID }
+                marks: { type: number, example: 24.5, description: 'Required unless absent=true; max 2 decimals' }
+                absent: { type: boolean, default: false }
+                expected_version: { type: integer, example: 1 }
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/MarkEnvelope' } } } }
+        '200': { description: Updated, content: { application/json: { schema: { $ref: '#/components/schemas/MarkEnvelope' } } } }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '428': { $ref: '#/components/responses/Error' }
+
+  /examinations/{examination}/mark-imports:
+    get:
+      tags: [Imports]
+      summary: List imports for an examination
+      parameters: [ { $ref: '#/components/parameters/Examination' } ]
+      responses: { '200': { description: OK } }
+    post:
+      tags: [Imports]
+      summary: Upload a marks CSV (processed asynchronously)
+      description: |
+        Columns (header required, any order, extra columns ignored):
+        `registration_no, course_code, component_code, marks` — `marks` is a
+        number with ≤ 2 decimals or `AB` for absent.
+
+        Returns **202** with the import resource; poll it for progress.
+        Uploading a byte-identical file again returns the existing import (**200**).
+      parameters:
+        - { $ref: '#/components/parameters/Examination' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '202': { description: Accepted, content: { application/json: { schema: { $ref: '#/components/schemas/ImportEnvelope' } } } }
+        '200': { description: Duplicate of an existing upload, content: { application/json: { schema: { $ref: '#/components/schemas/ImportEnvelope' } } } }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /mark-imports/{import}:
+    get:
+      tags: [Imports]
+      summary: Import status and live progress
+      parameters: [ { $ref: '#/components/parameters/Import' } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ImportEnvelope' } } } }
+  /mark-imports/{import}/retry:
+    post:
+      tags: [Imports]
+      summary: Re-run only the chunks of a failed import that did not complete
+      parameters: [ { $ref: '#/components/parameters/Import' } ]
+      responses:
+        '202': { description: Accepted }
+        '409': { $ref: '#/components/responses/Error' }
+  /mark-imports/{import}/errors:
+    get:
+      tags: [Imports]
+      summary: Row-level errors (cursor paginated)
+      parameters: [ { $ref: '#/components/parameters/Import' }, { $ref: '#/components/parameters/Cursor' } ]
+      responses: { '200': { description: OK } }
+  /mark-imports/{import}/errors.csv:
+    get:
+      tags: [Imports]
+      summary: Download all row errors as CSV
+      parameters: [ { $ref: '#/components/parameters/Import' } ]
+      responses: { '200': { description: CSV file, content: { text/csv: {} } } }
+
+  /examinations/{examination}/result-runs:
+    get:
+      tags: [Results]
+      summary: Result runs of an examination
+      parameters: [ { $ref: '#/components/parameters/Examination' } ]
+      responses: { '200': { description: OK } }
+    post:
+      tags: [Results]
+      summary: Start result processing (idempotent while a run is in flight)
+      parameters: [ { $ref: '#/components/parameters/Examination' } ]
+      responses:
+        '202': { description: Accepted, content: { application/json: { schema: { $ref: '#/components/schemas/RunEnvelope' } } } }
+        '409': { $ref: '#/components/responses/Error' }
+  /result-runs/{run}:
+    get:
+      tags: [Results]
+      summary: Result run status, progress and summary
+      parameters: [ { name: run, in: path, required: true, schema: { type: integer } } ]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/RunEnvelope' } } } }
+  /examinations/{examination}/results:
+    get:
+      tags: [Results]
+      summary: Staff view of results (results_ready or published)
+      parameters:
+        - { $ref: '#/components/parameters/Examination' }
+        - { name: status, in: query, schema: { type: string, enum: [pass, fail, withheld] } }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200': { description: OK }
+        '409': { $ref: '#/components/responses/Error' }
+  /examinations/{examination}/results/{registrationNo}:
+    get:
+      tags: [Results]
+      summary: Staff view of one student's result
+      parameters:
+        - { $ref: '#/components/parameters/Examination' }
+        - { name: registrationNo, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/StudentResultEnvelope' } } } }
+
+  /public/examinations/{examCode}/results/{registrationNo}:
+    get:
+      tags: [Public]
+      summary: Student result lookup (published examinations only, no auth, rate limited)
+      security: []
+      parameters:
+        - { name: examCode, in: path, required: true, schema: { type: string, example: SEM1-2026 } }
+        - { name: registrationNo, in: path, required: true, schema: { type: string, example: S001 } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/StudentResultEnvelope' } } } }
+        '404': { $ref: '#/components/responses/Error' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Token from API_KEYS (disabled when API_KEYS is empty). `X-Api-Key` header also accepted.
+  parameters:
+    Examination: { name: examination, in: path, required: true, schema: { type: integer } }
+    Import: { name: import, in: path, required: true, schema: { type: string, format: uuid } }
+    Cursor: { name: cursor, in: query, schema: { type: string } }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      schema: { type: string, minLength: 8, maxLength: 128 }
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: object
+                properties:
+                  code: { type: string, example: invalid_state_transition }
+                  message: { type: string }
+                  details: { type: object }
+  schemas:
+    ExaminationStatus:
+      type: string
+      enum: [draft, marks_entry, marks_locked, processing, results_ready, published]
+    ExaminationEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            id: { type: integer }
+            code: { type: string }
+            name: { type: string }
+            academic_year: { type: string }
+            status: { $ref: '#/components/schemas/ExaminationStatus' }
+            allowed_transitions: { type: array, items: { $ref: '#/components/schemas/ExaminationStatus' } }
+            current_result_run_id: { type: integer, nullable: true }
+            published_at: { type: string, format: date-time, nullable: true }
+    MarkEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            id: { type: integer }
+            marks: { type: string, nullable: true, example: '24.50' }
+            absent: { type: boolean }
+            version: { type: integer }
+            source: { type: string, enum: [api, csv] }
+            updated_by: { type: string }
+    ImportEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            status: { type: string, enum: [pending, splitting, processing, completed, completed_with_errors, failed] }
+            total_rows: { type: integer }
+            processed_rows: { type: integer }
+            success_rows: { type: integer }
+            failed_rows: { type: integer }
+            total_chunks: { type: integer }
+            progress:
+              type: object
+              nullable: true
+              properties:
+                chunks_completed: { type: integer }
+                chunks_total: { type: integer }
+                rows_processed: { type: integer }
+                percent: { type: number }
+            failure_reason: { type: string, nullable: true }
+    RunEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            id: { type: integer }
+            status: { type: string, enum: [processing, completed, failed] }
+            total_chunks: { type: integer }
+            students_processed: { type: integer }
+            summary: { type: object }
+    StudentResultEnvelope:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            status: { type: string, enum: [pass, fail, withheld] }
+            sgpa: { type: number, nullable: true }
+            credits_attempted: { type: integer }
+            credits_earned: { type: integer }
+            courses:
+              type: array
+              items:
+                type: object
+                properties:
+                  code: { type: string }
+                  percentage: { type: number, nullable: true }
+                  grade: { type: string, nullable: true }
+                  grade_point: { type: number }
+                  status: { type: string, enum: [pass, fail, absent, withheld] }
+                  remarks: { type: array, items: { type: string } }

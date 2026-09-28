@@ -1,8 +1,12 @@
 <?php
 
-use Illuminate\Foundation\Inspiring;
-use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schedule;
 
-Artisan::command('inspire', function () {
-    $this->comment(Inspiring::quote());
-})->purpose('Display an inspiring quote');
+Schedule::call(fn () => DB::table('idempotency_keys')->where('expires_at', '<', now())->delete())
+    ->name('prune-idempotency-keys')
+    ->hourly()
+    ->onOneServer();
+
+Schedule::command('queue:prune-batches --hours=72 --unfinished=72')->daily();
+Schedule::command('queue:prune-failed --hours=168')->daily();

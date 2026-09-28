@@ -59,6 +59,11 @@ return [
             'prefix_indexes' => true,
             'strict' => true,
             'engine' => null,
+            // READ COMMITTED instead of InnoDB's default REPEATABLE READ: parallel
+            // import chunks upsert disjoint keys, and RR's gap/next-key locks make
+            // them deadlock on neighbouring index ranges. Correctness relies on
+            // explicit row locks and compare-and-swap updates, not on snapshots.
+            'isolation_level' => env('DB_ISOLATION_LEVEL', 'READ COMMITTED'),
             'options' => extension_loaded('pdo_mysql') ? array_filter([
                 (PHP_VERSION_ID >= 80500 ? Mysql::ATTR_SSL_CA : PDO::MYSQL_ATTR_SSL_CA) => env('MYSQL_ATTR_SSL_CA'),
             ]) : [],

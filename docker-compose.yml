@@ -1,0 +1,136 @@
+# One command: `docker compose up --build`
+#   API        http://localhost:8080/api/v1
+#   Swagger UI http://localhost:8081
+#
+# Credentials below are for local evaluation only.
+
+x-app-env: &app-env
+  APP_NAME: exam-results
+  APP_ENV: production
+  APP_DEBUG: "false"
+  APP_KEY: base64:FZ6LIzz70d1j3Os89spu2XoBorQasPrXgucTXc22xGw=
+  APP_URL: http://localhost:8080
+  LOG_CHANNEL: stderr
+  LOG_LEVEL: info
+  DB_CONNECTION: mysql
+  DB_HOST: mysql
+  DB_PORT: 3306
+  DB_DATABASE: exams
+  DB_USERNAME: exams
+  DB_PASSWORD: exams
+  REDIS_CLIENT: phpredis
+  REDIS_HOST: redis
+  QUEUE_CONNECTION: redis
+  # Must exceed the longest job timeout (splitter: 600s) so a slow job is
+  # never handed to a second worker while the first is still running.
+  REDIS_QUEUE_RETRY_AFTER: 660
+  CACHE_STORE: redis
+  SESSION_DRIVER: database
+  # Leave empty to disable auth; format actor:token[,actor:token]
+  API_KEYS: ${API_KEYS:-}
+  IMPORT_QUEUE: imports
+  RESULTS_QUEUE: results
+  IMPORT_CHUNK_SIZE: 1000
+  RESULTS_STUDENTS_PER_CHUNK: 500
+
+x-app: &app
+  image: exam-results:latest
+  pull_policy: never   # built locally by the `migrate` service
+  environment: *app-env
+  volumes:
+    - storage:/var/www/html/storage/app
+  depends_on:
+    mysql: { condition: service_healthy }
+    redis: { condition: service_healthy }
+
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: exams
+      MYSQL_USER: exams
+      MYSQL_PASSWORD: exams
+      MYSQL_ROOT_PASSWORD: root
+    command: ["--max-connections=300", "--innodb-buffer-pool-size=512M"]
+    volumes:
+      - mysqldata:/var/lib/mysql
+      - ./docker/mysql-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    ports:
+      - "3307:3306"   # 3307 on the host so it does not clash with a local MySQL/XAMPP
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uexams -pexams --silent"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # One-shot: applies migrations before anything else starts.
+  migrate:
+    <<: *app
+    build: .
+    pull_policy: build
+    user: www-data
+    command: ["php", "artisan", "migrate", "--force"]
+    restart: "no"
+
+  app:
+    <<: *app
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./public:/var/www/html/public:ro
+    depends_on:
+      - app
+    restart: unless-stopped
+
+  # Horizontal scale: `docker compose up --scale worker=8`
+  worker:
+    <<: *app
+    user: www-data
+    command: ["php", "artisan", "queue:work", "redis", "--queue=imports,results,default",
+              "--sleep=1", "--max-jobs=5000", "--max-time=3600", "--memory=400"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    deploy:
+      replicas: 3
+    stop_grace_period: 120s
+    restart: unless-stopped
+
+  scheduler:
+    <<: *app
+    user: www-data
+    command: ["php", "artisan", "schedule:work"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    restart: unless-stopped
+
+  swagger:
+    image: swaggerapi/swagger-ui:v5.17.14
+    ports:
+      - "8081:8080"
+    environment:
+      URL: http://localhost:8080/openapi.yaml
+    depends_on:
+      - nginx
+
+volumes:
+  mysqldata:
+  redisdata:
+  storage:
