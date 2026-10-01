@@ -64,7 +64,7 @@ A simple web UI (plain HTML forms) is included to try everything without an API 
 | Scalability, technology choices, trade-offs | [§15](#15-scaling-considerations)–[§17](#17-trade-offs) |
 | ER diagram | [§9](#9-database-design) |
 | Migrations and a single start command | `database/migrations/`, and `docker compose up` ([§2](#2-run-with-docker-one-command)) |
-| Code quality and testing | 65 automated tests ([§19](#19-testing)), code tour ([§20](#20-code-tour)) |
+| Code quality and testing | 66 automated tests ([§19](#19-testing)), code tour ([§20](#20-code-tour)) |
 | Simple UI / API client | Web UI at `/`, Swagger UI at `/docs` |
 | Assumptions and incomplete areas documented | [§18](#18-assumptions-and-intentionally-incomplete-areas) |
 
@@ -88,7 +88,7 @@ It is ready when the log shows `app-1 | ... ready to handle connections`. Leave 
 | **Web UI** | http://localhost:8080 |
 | **Swagger UI** (every API endpoint, with "Try it out") | http://localhost:8080/docs (also http://localhost:8081) |
 | Student result lookup | http://localhost:8080/results |
-| API base URL | http://localhost:8080/api/v1 |
+| API base URL (lists where to start) | http://localhost:8080/api/v1 |
 | Health check | http://localhost:8080/up |
 
 **What `docker compose up` starts**
@@ -773,7 +773,7 @@ vendor/bin/phpunit -c phpunit.mysql.xml    # against real MySQL/MariaDB (needs a
 docker compose exec app vendor/bin/phpunit -c phpunit.mysql.xml   # inside Docker (exams_test is created automatically)
 ```
 
-**65 tests (329 assertions)** pass on SQLite, MariaDB 10.4 and MySQL 8.4.
+**66 tests (333 assertions)** pass on SQLite, MariaDB 10.4 and MySQL 8.4.
 
 | Test file | What it proves |
 |---|---|

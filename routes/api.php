@@ -9,6 +9,20 @@ use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function () {
 
+    // GET /api/v1: a short index so the base URL isn't a 404.
+    Route::get('/', fn () => response()->json([
+        'name' => 'University Examination & Result Processing API',
+        'version' => 'v1',
+        'documentation' => url('/docs'),
+        'openapi' => url('/openapi.yaml'),
+        'examples' => [
+            'examinations' => url('/api/v1/examinations'),
+            'programmes' => url('/api/v1/programmes'),
+            'courses' => url('/api/v1/courses'),
+            'students' => url('/api/v1/students'),
+        ],
+    ]));
+
     // Student-facing, unauthenticated, rate-limited. Published results only.
     Route::get('public/examinations/{examCode}/results/{registrationNo}', [ResultController::class, 'publicShow'])
         ->middleware('throttle:60,1');

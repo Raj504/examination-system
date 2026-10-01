@@ -60,6 +60,11 @@ class ApiConcernsTest extends TestCase
         ], ['X-Api-Key' => 'tok'])->assertCreated()->assertJsonPath('data.updated_by', 'examiner-7');
     }
 
+    public function test_api_base_url_lists_where_to_start(): void
+    {
+        $this->getJson('/api/v1')->assertOk()->assertJsonPath('version', 'v1')->assertJsonStructure(['documentation', 'examples']);
+    }
+
     public function test_unknown_resources_return_json_404(): void
     {
         $this->getJson('/api/v1/examinations/999')->assertNotFound()->assertJsonPath('error.code', 'not_found');
