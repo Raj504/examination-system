@@ -88,6 +88,7 @@ It is ready when the log shows `app-1 | ... ready to handle connections`. Leave 
 | **Web UI** | http://localhost:8080 |
 | **Swagger UI** (every API endpoint, with "Try it out") | http://localhost:8080/docs (also http://localhost:8081) |
 | Student result lookup | http://localhost:8080/results |
+| **Redis browser** (Redis Commander: see queued jobs and cache) | http://localhost:8082 |
 | API base URL (lists where to start) | http://localhost:8080/api/v1 |
 | Health check | http://localhost:8080/up |
 
@@ -102,6 +103,7 @@ It is ready when the log shows `app-1 | ... ready to handle connections`. Leave 
 | `worker` × 3 | Background workers: process CSV uploads and results. **No need to run `queue:work` yourself** |
 | `scheduler` | Hourly/daily clean-up tasks. Its "No scheduled commands are ready to run" log line every minute is normal |
 | `swagger` | Standalone Swagger UI on port 8081 |
+| `redis-ui` | Redis Commander on port 8082: browse Redis like phpMyAdmin. `queue` = database 0 (jobs waiting / running), `cache` = database 1 (cached exam structure, job locks) |
 
 **Useful commands**
 
